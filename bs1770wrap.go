@@ -72,7 +72,7 @@ type bs1770gainData struct {
 // analyze it with bs1770gain, and return a struct populated
 // with data we're interested in.
 func CalculateLoudness(file string) (LoudnessData, error) {
-	cmd := exec.Command("bs1770",
+	cmd := exec.Command("bs1770gain",
 		"-itr",             // integrated, true peak, range
 		"--loglevel=quiet", // remove all non-essential output
 		"--xml",            // get XML output
