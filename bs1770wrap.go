@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"io/ioutil"
+	"math"
 	"os/exec"
+	"path"
 	"regexp"
 	"strconv"
 )
@@ -72,15 +75,11 @@ type bs1770gainData struct {
 	Album   albumData
 }
 
-// CalculateLoudness will take in a path to an audio file,
-// analyze it with bs1770gain, and return a struct populated
-// with data we're interested in.
-func CalculateLoudness(file string) (LoudnessData, error) {
+func getFileLength(file string) (float32, error) {
 	var out bytes.Buffer
-
 	sampleRegex, err := regexp.Compile(`Length \(seconds\):\s+(?P<len>\d+(\.\d+)?)`)
 	if err != nil {
-		return LoudnessData{}, fmt.Errorf("Cannot compile regex: %v", err)
+		return float32(math.NaN()), fmt.Errorf("Cannot compile regex: %v", err)
 	}
 
 	cmd := exec.Command("sox",
@@ -92,7 +91,7 @@ func CalculateLoudness(file string) (LoudnessData, error) {
 
 	err = cmd.Run()
 	if err != nil {
-		return LoudnessData{}, fmt.Errorf("Cannot get audio length: %v", err)
+		return float32(math.NaN()), fmt.Errorf("Cannot get audio length: %v", err)
 	}
 
 	// get length from regex
@@ -104,41 +103,90 @@ func CalculateLoudness(file string) (LoudnessData, error) {
 	}
 	lenstr, ok := result["len"]
 	if !ok {
-		return LoudnessData{}, fmt.Errorf("Cannot get audio length: regex did not match")
+		return float32(math.NaN()), fmt.Errorf("Cannot get audio length: regex did not match")
 	}
 
 	len64, err := strconv.ParseFloat(lenstr, 32)
 	if err != nil {
-		return LoudnessData{}, fmt.Errorf("Cannot parse audio length: %v", err)
+		return float32(math.NaN()), fmt.Errorf("Cannot parse audio length: %v", err)
+	}
+	return float32(len64), nil
+}
+
+func getLoudnessData(file string) (float32, float32, float32, error) {
+	var out bytes.Buffer
+	tmpDir, err := ioutil.TempDir("", "bs1770wrap")
+	if err != nil {
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Error creating temporary directory: %v", err)
 	}
 
-	out.Reset()
+	tmpPath := path.Join(tmpDir, path.Base(file))
+
+	// write a hi-passed file into temporary dir
+	cmd := exec.Command("sox",
+		file,
+		tmpPath,
+		"highpass",
+		"60",
+	)
+
+	err = cmd.Run()
+	if err != nil {
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Error creating temporary file: %v", err)
+	}
 
 	cmd = exec.Command("bs1770gain",
 		"-itr",             // integrated, true peak, range
 		"--loglevel=quiet", // remove all non-essential output
 		"--xml",            // get XML output
-		file,               // what file to scan
+		tmpPath,            // what file to scan
 	)
 
 	cmd.Stdout = &out
 
 	err = cmd.Run()
 	if err != nil {
-		return LoudnessData{}, fmt.Errorf("Cannot calculate loudness: %v", err)
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Cannot calculate loudness: %v", err)
 	}
 
 	gd := bs1770gainData{}
 	err = xml.Unmarshal([]byte(out.String()), &gd)
 	if err != nil {
-		return LoudnessData{}, fmt.Errorf("Cannot parse loudness information: %v", err)
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Cannot parse loudness information: %v", err)
+	}
+
+	return gd.Album.Track.IntegratedLoudness.Value,
+		gd.Album.Track.LoudnessRange.Value,
+		gd.Album.Track.TruePeak.Value,
+		nil
+}
+
+// CalculateLoudness will take in a path to an audio file,
+// analyze it with bs1770gain, and return a struct populated
+// with data we're interested in. To avoid bass-heavy music
+// skewing the measurements, we'll be using sox to highpass
+// the file before scanning it for loudness.
+func CalculateLoudness(file string) (LoudnessData, error) {
+
+	length, err := getFileLength(file)
+	if err != nil {
+		return LoudnessData{}, err
+	}
+
+	loudnessIntegrated, loudnessRange, loudnessPeak, err := getLoudnessData(file)
+	if err != nil {
+		return LoudnessData{}, err
 	}
 
 	ld := LoudnessData{}
-	ld.IntegratedLoudness = gd.Album.Track.IntegratedLoudness.Value
-	ld.LoudnessRange = gd.Album.Track.LoudnessRange.Value
-	ld.TruePeak = gd.Album.Track.TruePeak.Value
-	ld.Length = float32(len64)
+	ld.IntegratedLoudness = loudnessIntegrated
+	ld.LoudnessRange = loudnessRange
+	ld.TruePeak = loudnessPeak
+	ld.Length = length
 
 	return ld, nil
 }
