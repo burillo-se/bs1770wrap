@@ -76,23 +76,39 @@ type bs1770gainData struct {
 	Album   albumData
 }
 
-func getFileLength(file string) (float32, error) {
+func getLoudnessData(file string) (float32, float32, float32, float32, error) {
 	var out bytes.Buffer
+
 	sampleRegex, err := regexp.Compile(`Length \(seconds\):\s+(?P<len>\d+(\.\d+)?)`)
 	if err != nil {
-		return float32(math.NaN()), fmt.Errorf("Cannot compile regex: %v", err)
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Cannot compile regex: %v", err)
 	}
 
+	tmpDir, err := ioutil.TempDir("", "bs1770wrap")
+	if err != nil {
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Error creating temporary directory: %v", err)
+	}
+	defer os.Remove(tmpDir)
+
+	tmpPath := path.Join(tmpDir, path.Base(file))
+	defer os.Remove(tmpPath)
+
+	// write a hi-passed file into temporary dir
 	cmd := exec.Command("sox",
-		file, // file to scan
-		"-n", // gather statistics
+		file,
+		tmpPath,
+		"highpass",
+		"80",
 		"stat",
 	)
 	cmd.Stderr = &out
 
 	err = cmd.Run()
 	if err != nil {
-		return float32(math.NaN()), fmt.Errorf("Cannot get audio length: %v", err)
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Error creating temporary file: %v", err)
 	}
 
 	// get length from regex
@@ -104,41 +120,16 @@ func getFileLength(file string) (float32, error) {
 	}
 	lenstr, ok := result["len"]
 	if !ok {
-		return float32(math.NaN()), fmt.Errorf("Cannot get audio length: regex did not match")
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Cannot get audio length: regex did not match")
 	}
 
 	len64, err := strconv.ParseFloat(lenstr, 32)
 	if err != nil {
-		return float32(math.NaN()), fmt.Errorf("Cannot parse audio length: %v", err)
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+			fmt.Errorf("Cannot parse audio length: %v", err)
 	}
-	return float32(len64), nil
-}
-
-func getLoudnessData(file string) (float32, float32, float32, error) {
-	var out bytes.Buffer
-	tmpDir, err := ioutil.TempDir("", "bs1770wrap")
-	if err != nil {
-		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
-			fmt.Errorf("Error creating temporary directory: %v", err)
-	}
-	defer os.Remove(tmpDir)
-
-	tmpPath := path.Join(tmpDir, path.Base(file))
-
-	// write a hi-passed file into temporary dir
-	cmd := exec.Command("sox",
-		file,
-		tmpPath,
-		"highpass",
-		"80",
-	)
-
-	err = cmd.Run()
-	if err != nil {
-		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
-			fmt.Errorf("Error creating temporary file: %v", err)
-	}
-	defer os.Remove(tmpPath)
+	out.Reset()
 
 	cmd = exec.Command("bs1770gain",
 		"-itr",             // integrated, true peak, range
@@ -151,20 +142,21 @@ func getLoudnessData(file string) (float32, float32, float32, error) {
 
 	err = cmd.Run()
 	if err != nil {
-		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
 			fmt.Errorf("Cannot calculate loudness: %v", err)
 	}
 
 	gd := bs1770gainData{}
 	err = xml.Unmarshal([]byte(out.String()), &gd)
 	if err != nil {
-		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
+		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
 			fmt.Errorf("Cannot parse loudness information: %v", err)
 	}
 
 	return gd.Album.Track.IntegratedLoudness.Value,
 		gd.Album.Track.LoudnessRange.Value,
 		gd.Album.Track.TruePeak.Value,
+		float32(len64),
 		nil
 }
 
@@ -174,13 +166,7 @@ func getLoudnessData(file string) (float32, float32, float32, error) {
 // skewing the measurements, we'll be using sox to highpass
 // the file before scanning it for loudness.
 func CalculateLoudness(file string) (LoudnessData, error) {
-
-	length, err := getFileLength(file)
-	if err != nil {
-		return LoudnessData{}, err
-	}
-
-	loudnessIntegrated, loudnessRange, loudnessPeak, err := getLoudnessData(file)
+	loudnessIntegrated, loudnessRange, loudnessPeak, length, err := getLoudnessData(file)
 	if err != nil {
 		return LoudnessData{}, err
 	}
