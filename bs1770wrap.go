@@ -100,7 +100,7 @@ func getLoudnessData(file string) (float32, float32, float32, float32, error) {
 		file,
 		tmpPath,
 		"highpass",
-		"80",
+		"100",
 		"stat",
 	)
 	cmd.Stderr = &out
