@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
@@ -120,6 +121,7 @@ func getLoudnessData(file string) (float32, float32, float32, error) {
 		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
 			fmt.Errorf("Error creating temporary directory: %v", err)
 	}
+	defer os.Remove(tmpDir)
 
 	tmpPath := path.Join(tmpDir, path.Base(file))
 
@@ -136,6 +138,7 @@ func getLoudnessData(file string) (float32, float32, float32, error) {
 		return float32(math.NaN()), float32(math.NaN()), float32(math.NaN()),
 			fmt.Errorf("Error creating temporary file: %v", err)
 	}
+	defer os.Remove(tmpPath)
 
 	cmd = exec.Command("bs1770gain",
 		"-itr",             // integrated, true peak, range
