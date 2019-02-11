@@ -19,7 +19,7 @@ type LoudnessData struct {
 	Range      float32 // lufs
 	Shortterm  float32 // lufs
 	Momentary  float32 // lufs
-	Length     int64   // microseconds
+	Length     uint64  // microseconds
 }
 
 /* Data format:
@@ -149,7 +149,7 @@ func CalculateLoudness(file string) (LoudnessData, error) {
 		return LoudnessData{}, fmt.Errorf("Cannot parse loudness information: %v", err)
 	}
 
-	microseconds := int64(math.Round(len64 * 1000000.0))
+	microseconds := uint64(math.Round(len64 * 1000000.0))
 
 	return LoudnessData{
 		Integrated: gd.Album.Track.Integrated.Value,
